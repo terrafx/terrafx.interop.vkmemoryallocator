@@ -12,7 +12,6 @@ architecture=''
 build=false
 ci=false
 configuration='Debug'
-generate=false
 help=false
 pack=false
 restore=false
@@ -39,10 +38,6 @@ while [[ $# -gt 0 ]]; do
     --configuration)
       configuration=$2
       shift 2
-      ;;
-    --generate)
-      generate=true
-      shift 1
       ;;
     --help)
       help=true
@@ -79,9 +74,9 @@ function Build {
   logFile="$LogDir/$configuration/build.binlog"
 
   if [[ -z "$properties" ]]; then
-    dotnet build -c "$configuration" --no-restore -v "$verbosity" /bl:"$logFile" /err "$solution"
+    dotnet build -c "$configuration" --no-restore -v "$verbosity" /p:Platform="Any CPU" /bl:"$logFile" /err "$solution"
   else
-    dotnet build -c "$configuration" --no-restore -v "$verbosity" /bl:"$logFile" /err "${properties[@]}" "$solution"
+    dotnet build -c "$configuration" --no-restore -v "$verbosity" /p:Platform="Any CPU" /bl:"$logFile" /err "${properties[@]}" "$solution"
   fi
 
   LASTEXITCODE=$?
@@ -97,17 +92,6 @@ function CreateDirectory {
   then
     mkdir -p "$1"
   fi
-}
-
-function Generate {
-  generationDir="$RepoRoot/generation"
-  generateRspFiles=$(find $generationDir -name 'generate.rsp')
-
-  for f in $generateRspFiles; do
-    pushd "$(dirname $f)" > /dev/null
-    ClangSharpPInvokeGenerator "@generate.rsp"
-    popd
-  done
 }
 
 function Help {
@@ -126,7 +110,6 @@ function Help {
   echo "  --solution <value>        Path to solution to build"
   echo "  --ci                      Set when running on CI server"
   echo "  --architecture <value>    Test Architecture (<auto>, amd64, x64, x86, arm64, arm)"
-  echo "  --generate                Generates the bindings for the solution"
   echo ""
   echo "Command line arguments not listed above are passed through to MSBuild."
 }
@@ -135,9 +118,9 @@ function Pack {
   logFile="$LogDir/$configuration/pack.binlog"
 
   if [[ -z "$properties" ]]; then
-    dotnet pack -c "$configuration" --no-build --no-restore -v "$verbosity" /bl:"$logFile" /err "$solution"
+    dotnet pack -c "$configuration" --no-build --no-restore -v "$verbosity" /p:Platform="Any CPU" /bl:"$logFile" /err "$solution"
   else
-    dotnet pack -c "$configuration" --no-build --no-restore -v "$verbosity" /bl:"$logFile" /err "${properties[@]}" "$solution"
+    dotnet pack -c "$configuration" --no-build --no-restore -v "$verbosity" /p:Platform="Any CPU" /bl:"$logFile" /err "${properties[@]}" "$solution"
   fi
 
   LASTEXITCODE=$?
@@ -152,9 +135,9 @@ function Restore {
   logFile="$LogDir/$configuration/restore.binlog"
 
   if [[ -z "$properties" ]]; then
-    dotnet restore -v "$verbosity" /bl:"$logFile" /err "$solution"
+    dotnet restore -v "$verbosity" /p:Platform="Any CPU" /bl:"$logFile" /err "$solution"
   else
-    dotnet restore -v "$verbosity" /bl:"$logFile" /err "${properties[@]}" "$solution"
+    dotnet restore -v "$verbosity" /p:Platform="Any CPU" /bl:"$logFile" /err "${properties[@]}" "$solution"
   fi
 
   LASTEXITCODE=$?
@@ -169,9 +152,9 @@ function Test {
   logFile="$LogDir/$configuration/test.binlog"
 
   if [[ -z "$properties" ]]; then
-    dotnet test -c "$configuration" --no-build --no-restore -v "$verbosity" /bl:"$logFile" /err "$solution"
+    dotnet test -c "$configuration" --no-build --no-restore -v "$verbosity" /p:Platform="Any CPU" /bl:"$logFile" /err "$solution"
   else
-    dotnet test -c "$configuration" --no-build --no-restore -v "$verbosity" /bl:"$logFile" /err "${properties[@]}" "$solution"
+    dotnet test -c "$configuration" --no-build --no-restore -v "$verbosity" /p:Platform="Any CPU" /bl:"$logFile" /err "${properties[@]}" "$solution"
   fi
 
   LASTEXITCODE=$?
@@ -201,7 +184,7 @@ fi
 RepoRoot="$ScriptRoot/.."
 
 if [[ -z "$solution" ]]; then
-  solution="$RepoRoot/TerraFX.Interop.VkMemoryAllocator.sln"
+  solution="$RepoRoot/TerraFX.Interop.VkMemoryAllocator.slnx"
 fi
 
 ArtifactsDir="$RepoRoot/artifacts"
@@ -221,17 +204,9 @@ if [[ ! -z "$architecture" ]]; then
   DotNetInstallDirectory="$ArtifactsDir/dotnet"
   CreateDirectory "$DotNetInstallDirectory"
 
-  . "$DotNetInstallScript" --channel master --version 5.0.100 --install-dir "$DotNetInstallDirectory" --architecture "$architecture"
+  . "$DotNetInstallScript" --channel 10.0 --version latest --install-dir "$DotNetInstallDirectory" --architecture "$architecture"
 
   PATH="$DotNetInstallDirectory:$PATH:"
-fi
-
-if $generate; then
-  Generate
-
-  if [ "$LASTEXITCODE" != 0 ]; then
-    return "$LASTEXITCODE"
-  fi
 fi
 
 if $restore; then
