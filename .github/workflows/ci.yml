@@ -2,9 +2,10 @@ name: ci
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, v* ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, v* ]
+  workflow_dispatch:
 
 jobs:
   windows-x64:
@@ -24,27 +25,31 @@ jobs:
         path: |
           ./artifacts/bin/**/*
           ./artifacts/log/**/*
-          ./artifacts/pkg/**/*
           ./artifacts/tst/**/*
         if-no-files-found: error
-  windows-x86:
-    runs-on: ${{ matrix.os }}-latest
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.os }}_${{ matrix.configuration }}_${{ matrix.architecture }}_pkg
+        path: |
+          ./artifacts/pkg/**/*
+        if-no-files-found: error
+  windows-arm64:
+    runs-on: ${{ matrix.os }}-11-arm
     strategy:
       matrix:
-        architecture: [ x86 ]
+        architecture: [ arm64 ]
         configuration: [ debug, release ]
         os: [ windows ]
     steps:
     - uses: actions/checkout@v4
-    - run: ./scripts/cibuild.cmd -configuration ${{ matrix.configuration }} -architecture ${{ matrix.architecture }} /p:PlatformTarget=${{ matrix.architecture }}
+    - run: ./scripts/cibuild.cmd -configuration ${{ matrix.configuration }} -architecture ${{ matrix.architecture }}
       shell: cmd
     - uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.os }}_${{ matrix.configuration }}_x86
+        name: ${{ matrix.os }}_${{ matrix.configuration }}_${{ matrix.architecture }}
         path: |
           ./artifacts/bin/**/*
           ./artifacts/log/**/*
-          ./artifacts/pkg/**/*
           ./artifacts/tst/**/*
         if-no-files-found: error
   linux-x64:
@@ -64,16 +69,15 @@ jobs:
         path: |
           ./artifacts/bin/**/*
           ./artifacts/log/**/*
-          ./artifacts/pkg/**/*
           ./artifacts/tst/**/*
         if-no-files-found: error
-  macos-x64:
-    runs-on: ${{ matrix.os }}-latest
+  linux-arm64:
+    runs-on: ${{ matrix.os }}-24.04-arm
     strategy:
       matrix:
-        architecture: [ x64 ]
+        architecture: [ arm64 ]
         configuration: [ debug, release ]
-        os: [ macos ]
+        os: [ ubuntu ]
     steps:
     - uses: actions/checkout@v4
     - run: ./scripts/cibuild.sh --configuration ${{ matrix.configuration }} --architecture ${{ matrix.architecture }}
@@ -84,39 +88,64 @@ jobs:
         path: |
           ./artifacts/bin/**/*
           ./artifacts/log/**/*
-          ./artifacts/pkg/**/*
           ./artifacts/tst/**/*
         if-no-files-found: error
-  build-nuget:
+  sign-nuget:
     runs-on: windows-latest
+    if: ${{ github.event_name == 'push' }}
+    needs: [ windows-x64, windows-arm64, linux-x64, linux-arm64 ]
+    permissions:
+      id-token: write
     steps:
     - uses: actions/checkout@v4
-    - run: ./scripts/cibuild.cmd -configuration release -architecture x64
-      shell: cmd
-      env:
-        EXCLUDE_RUN_ID_FROM_PACKAGE: true
+    - uses: actions/download-artifact@v4
+      with:
+        merge-multiple: true
+        path: ./artifacts/pkg
+        pattern: "*_release_*_pkg"
+    - uses: actions/setup-dotnet@v4
+      with:
+        global-json-file: ./global.json
+    - run: dotnet tool install --tool-path ./artifacts/tools --prerelease sign
+    - uses: azure/login@v2
+      with:
+        allow-no-subscriptions: true
+        client-id: "${{ secrets.AZURE_CLIENT_ID }}"
+        tenant-id: "${{ secrets.AZURE_TENANT_ID }}"
+    - run: ./artifacts/tools/sign code azure-key-vault "**/*.nupkg" --base-directory "${{ github.workspace }}/artifacts/pkg" --file-list "${{ github.workspace }}/scripts/SignClientFileList.txt" --publisher-name "TerraFX" --description "TerraFX.Interop.VkMemoryAllocator" --description-url "https://github.com/terrafx/terrafx.interop.vkmemoryallocator" --azure-credential-type "azure-cli" --azure-key-vault-url "${{ secrets.KEY_VAULT_URL }}" --azure-key-vault-certificate "${{ secrets.KEY_VAULT_CERTIFICATE_ID }}"
+      shell: pwsh
     - uses: actions/upload-artifact@v4
       with:
-        name: nuget
+        name: sign_nuget
         path: |
-          ./artifacts/bin/**/*
-          ./artifacts/log/**/*
           ./artifacts/pkg/**/*
-          ./artifacts/tst/**/*
         if-no-files-found: error
-  publish-nightlies:
+  publish-nightlies-azure:
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'push' }}
-    needs: [ windows-x64, windows-x86, linux-x64, macos-x64, build-nuget ]
+    needs: [ sign-nuget ]
     steps:
     - uses: actions/download-artifact@v4
       with:
-        name: windows_release_x64
-        path: ./artifacts
-    - uses: actions/setup-dotnet@v1
+        name: sign_nuget
+        path: ./artifacts/pkg
+    - uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
         source-url: https://pkgs.terrafx.dev/index.json
       env:
         NUGET_AUTH_TOKEN: ${{ secrets.AZURE_DEVOPS_PAT }}
-    - run: dotnet nuget push ./artifacts/pkg/Release/*.nupkg --api-key AzureDevOps
+    - run: dotnet nuget push "./artifacts/pkg/Release/*.nupkg" --api-key AzureDevOps --skip-duplicate
+  publish-nightlies-github:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' }}
+    needs: [ sign-nuget ]
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: sign_nuget
+        path: ./artifacts/pkg
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+    - run: dotnet nuget push "./artifacts/pkg/Release/*.nupkg" --source https://nuget.pkg.github.com/terrafx/index.json --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
